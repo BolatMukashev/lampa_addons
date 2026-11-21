@@ -1,26 +1,105 @@
 (function () {
     'use strict';
 
-    // Парсер fr.pornhub.org для Lampa: каталог, сортировка, поиск, воспроизведение.
-    // Если в обычном браузере блокирует CORS, укажите свой прокси в PROXY,
-    // например: 'https://ваш-прокси/?url='  (в Android-приложении Lampa обычно не нужен).
+    // Парсер fr.pornhub.org для Lampa (версия с отладочным журналом на экране)
 
     var HOST = 'https://fr.pornhub.org';
-    var PROXY = '';
+    var PROXY = '';       // например 'https://название.workers.dev/?url='
+    var DEBUG = true;     // false — отключить зелёный журнал на экране
+
+    // ---------- журнал на экране ----------
+    function log(msg) {
+        try { console.log('[PH]', msg); } catch (e) {}
+        if (!DEBUG) return;
+        var box = document.getElementById('ph-debug');
+        if (!box) {
+            box = document.createElement('div');
+            box.id = 'ph-debug';
+            box.style.cssText = 'position:fixed;left:0;right:0;top:0;max-height:45%;overflow:auto;' +
+                'background:rgba(0,0,0,.88);color:#0f0;font:12px monospace;padding:6px;' +
+                'z-index:2147483647;white-space:pre-wrap;word-break:break-all';
+            box.onclick = function () { box.parentNode && box.parentNode.removeChild(box); };
+            document.body.appendChild(box);
+        }
+        box.textContent += msg + '\n';
+        box.scrollTop = box.scrollHeight;
+    }
+
+    window.addEventListener('error', function (e) {
+        log('JS ОШИБКА: ' + e.message + ' (' + (e.filename || '').split('/').pop() + ':' + e.lineno + ')');
+    });
+
+    log('PH плагин загружен');
+    log('API: Reguest=' + !!Lampa.Reguest + ' InteractionCategory=' + !!Lampa.InteractionCategory +
+        ' Select=' + !!Lampa.Select + ' Input=' + !!Lampa.Input + ' Player=' + !!Lampa.Player);
+
     var network = new Lampa.Reguest();
 
     function wrap(url) {
         return PROXY ? PROXY + encodeURIComponent(url) : url;
     }
 
+    // ---------- запросы: сначала native, потом fetch ----------
     function get(url, ok, fail) {
-        network.native(wrap(url), ok, function (e) {
-            var why = e && (e.status || e.statusText || e.message || e.responseText) || 'нет ответа (вероятно CORS)';
-            Lampa.Noty.show('PH: ошибка запроса: ' + String(why).slice(0, 80));
+        var full = wrap(url);
+        var finished = false;
+
+        function good(d) {
+            if (finished) return;
+            finished = true;
+            try { ok(d); } catch (e) { log('ОШИБКА в обработке ответа: ' + e.message); }
+        }
+        function bad(e) {
+            if (finished) return;
+            finished = true;
             if (fail) fail(e);
-        }, false, { dataType: 'text' });
+        }
+        function viaFetch() {
+            log('fetch → ' + full.slice(0, 90));
+            fetch(full).then(function (r) {
+                log('fetch статус: ' + r.status);
+                return r.text();
+            }).then(function (t) {
+                log('fetch получено символов: ' + t.length);
+                good(t);
+            }).catch(function (e) {
+                log('fetch ОШИБКА: ' + e + '  (скорее всего CORS)');
+                bad(e);
+            });
+        }
+
+        var nativeDone = false;
+        var timer = setTimeout(function () {
+            if (nativeDone) return;
+            nativeDone = true;
+            log('native: нет ответа 10 сек');
+            viaFetch();
+        }, 10000);
+
+        log('native → ' + full.slice(0, 90));
+        try {
+            network.native(full, function (d) {
+                if (nativeDone) return;
+                nativeDone = true;
+                clearTimeout(timer);
+                log('native ок, символов: ' + (d && d.length));
+                good(d);
+            }, function (e) {
+                if (nativeDone) return;
+                nativeDone = true;
+                clearTimeout(timer);
+                log('native ОШИБКА: ' + (e ? (e.status || e.statusText || e.message || JSON.stringify(e)) : 'пусто'));
+                viaFetch();
+            }, false, { dataType: 'text' });
+        } catch (e) {
+            nativeDone = true;
+            clearTimeout(timer);
+            log('native исключение: ' + e.message);
+            viaFetch();
+        }
     }
 
+    // ---------- разбор ----------
     function buildUrl(o, page) {
         var base = o.search
             ? HOST + '/video/search?search=' + encodeURIComponent(o.search)
@@ -29,11 +108,15 @@
     }
 
     function parseList(html) {
-        var doc = new DOMParser().parseFromString(html, 'text/html');
+        var s = typeof html === 'string' ? html : String(html);
+        var doc = new DOMParser().parseFromString(s, 'text/html');
+        var nodes = doc.querySelectorAll('li.pcVideoListItem');
+        log('найдено li.pcVideoListItem: ' + nodes.length);
+
         var out = [];
         var seen = {};
 
-        doc.querySelectorAll('li.pcVideoListItem').forEach(function (li) {
+        nodes.forEach(function (li) {
             var a = li.querySelector('span.title a') || li.querySelector('a[href*="viewkey"]');
             if (!a) return;
 
@@ -56,6 +139,12 @@
             });
         });
 
+        if (!out.length) {
+            log('карточек 0. Начало ответа: ' + s.slice(0, 200).replace(/\s+/g, ' '));
+            log('viewkey в тексте: ' + (s.indexOf('viewkey') > -1) + ', длина: ' + s.length);
+        } else {
+            log('карточек: ' + out.length);
+        }
         return out;
     }
 
@@ -66,11 +155,11 @@
     function getMediaDefinitions(html) {
         var m = html.match(/var flashvars_\d+\s*=\s*(\{[\s\S]*?\});\s*\n/);
         if (m) {
-            try { return JSON.parse(m[1]).mediaDefinitions || []; } catch (e) {}
+            try { return JSON.parse(m[1]).mediaDefinitions || []; } catch (e) { log('flashvars JSON: ' + e.message); }
         }
         m = html.match(/"mediaDefinitions"\s*:\s*(\[[\s\S]*?\])\s*,\s*"/);
         if (m) {
-            try { return JSON.parse(m[1]); } catch (e) {}
+            try { return JSON.parse(m[1]); } catch (e) { log('mediaDefinitions JSON: ' + e.message); }
         }
         return [];
     }
@@ -79,10 +168,14 @@
         var keys = Object.keys(qualities).sort(function (a, b) {
             return parseInt(b) - parseInt(a);
         });
-        if (!keys.length) return Lampa.Noty.show('Не удалось найти видеопоток');
+        if (!keys.length) {
+            log('видеопотоки не найдены');
+            return Lampa.Noty.show('Не удалось найти видеопоток');
+        }
 
         var map = {};
         keys.forEach(function (k) { map[k + 'p'] = qualities[k]; });
+        log('запуск плеера, качества: ' + keys.join(','));
 
         Lampa.Player.play({
             url: qualities[keys[0]],
@@ -92,10 +185,12 @@
     }
 
     function play(item) {
-        Lampa.Noty.show('Загрузка видео...');
+        log('открываю видео: ' + item.video);
 
         get(item.video, function (html) {
             var defs = getMediaDefinitions(html);
+            log('mediaDefinitions: ' + defs.length);
+
             var mp4 = defs.filter(function (d) { return d.format === 'mp4' && d.videoUrl; })[0];
             var hls = defs.filter(function (d) { return d.format === 'hls' && d.videoUrl; });
 
@@ -118,29 +213,26 @@
                         });
                         if (Object.keys(q).length) startPlayer(item.name, q);
                         else fallbackHls();
-                    } catch (e) { fallbackHls(); }
+                    } catch (e) { log('mp4 список: ' + e.message); fallbackHls(); }
                 }, fallbackHls);
             } else {
                 fallbackHls();
             }
-        }, function () {
-            Lampa.Noty.show('Ошибка загрузки страницы видео');
         });
     }
 
+    // ---------- компонент ----------
     function Component(object) {
+        log('компонент создан: ' + JSON.stringify({ sort: object.sort, search: object.search }));
         var comp = new Lampa.InteractionCategory(object);
 
         comp.create = function () {
             var _this = this;
+            log('create()');
             get(buildUrl(object, 1), function (html) {
                 var items = parseList(html);
                 if (items.length) _this.build({ results: items, page: 1, total_pages: 50 });
-                else {
-                    var s = typeof html === 'string' ? html : JSON.stringify(html || '');
-                    Lampa.Noty.show('PH: получено ' + s.length + ' симв., pcVideoListItem: ' + (s.indexOf('pcVideoListItem') > -1 ? 'есть' : 'нет') + ', начало: ' + s.slice(0, 60).replace(/\s+/g, ' '));
-                    _this.empty();
-                }
+                else _this.empty();
             }, function () {
                 _this.empty();
             });
@@ -162,10 +254,12 @@
     }
 
     function open(params) {
+        log('открываю раздел: ' + (params.title || ''));
         Lampa.Activity.push($.extend({ url: '', title: 'PH', component: 'ph_plugin', page: 1 }, params));
     }
 
     function menu() {
+        log('нажато меню PH');
         Lampa.Select.show({
             title: 'PH',
             items: [
@@ -192,6 +286,7 @@
     }
 
     function init() {
+        log('init: добавляю пункт меню');
         Lampa.Component.add('ph_plugin', Component);
 
         var btn = $(
