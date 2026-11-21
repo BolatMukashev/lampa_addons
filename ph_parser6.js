@@ -19,7 +19,7 @@
         if (!box) {
             box = document.createElement('div');
             box.id = 'ph-debug';
-            box.style.cssText = 'position:fixed;left:0;right:0;bottom:0;max-height:30%;overflow:auto;' +
+            box.style.cssText = 'position:fixed;left:0;right:0;bottom:0;max-height:55%;overflow:auto;' +
                 'background:rgba(0,0,0,.88);color:#0f0;font:11px monospace;padding:4px;' +
                 'z-index:2147483647;white-space:pre-wrap;word-break:break-all';
             box.onclick = function () { box.parentNode && box.parentNode.removeChild(box); };
@@ -201,23 +201,46 @@
         } catch (e) { log('копирование: ' + e.message); }
     }
 
-    // Проба: отвечает ли CDN на запрос и пропустит ли его браузерный движок (как у встроенного плеера)
-    function probe(url) {
-        try {
-            network.native(url, function (d) {
-                log('ПРОБА native: ОК, ' + (d && d.length) + ' симв., начало: ' + String(d).slice(0, 90).replace(/\s+/g, ' '));
-            }, function (e) {
-                log('ПРОБА native: ОШИБКА ' + (e ? (e.status || e.statusText || e.message || JSON.stringify(e)) : '?'));
-            }, false, { dataType: 'text' });
-        } catch (e) { log('ПРОБА native исключение: ' + e.message); }
+    function resolveUrl(base, rel) {
+        try { return new URL(rel, base).href; } catch (e) { return rel; }
+    }
 
+    function nativeText(url, ok, fail) {
         try {
-            fetch(url).then(function (r) {
-                log('ПРОБА fetch (как во встроенном плеере): статус ' + r.status);
-            }).catch(function (e) {
-                log('ПРОБА fetch (как во встроенном плеере): ОШИБКА ' + e + ' -> признак CORS');
-            });
-        } catch (e) { log('ПРОБА fetch исключение: ' + e.message); }
+            network.native(url, ok, function (e) {
+                fail('ОШИБКА ' + (e ? (e.status || e.statusText || e.message || JSON.stringify(e)) : '?'));
+            }, false, { dataType: 'text' });
+        } catch (e) { fail('исключение ' + e.message); }
+    }
+
+    // Проба цепочки: master -> вариант -> первый сегмент
+    function probe(url) {
+        nativeText(url, function (d) {
+            var txt = String(d);
+            log('MASTER: ' + txt.replace(/\s+/g, ' '));
+            var lines = txt.split(/\r?\n/).filter(function (l) { return l && l.charAt(0) !== '#'; });
+            if (!lines.length) return log('в master нет ссылок на варианты');
+
+            var v = resolveUrl(url, lines[0].trim());
+            log('ВАРИАНТ URL: ' + v);
+
+            nativeText(v, function (vd) {
+                var vt = String(vd);
+                log('ВАРИАНТ ок, ' + vt.length + ' симв.: ' + vt.slice(0, 300).replace(/\s+/g, ' '));
+
+                var segs = vt.split(/\r?\n/).filter(function (l) { return l && l.charAt(0) !== '#'; });
+                if (!segs.length) return log('в варианте нет сегментов');
+
+                var seg = resolveUrl(v, segs[0].trim());
+                log('СЕГМЕНТ URL: ' + seg);
+
+                fetch(seg, { headers: { Range: 'bytes=0-99' } }).then(function (r) {
+                    log('СЕГМЕНТ fetch: статус ' + r.status);
+                }).catch(function (e) {
+                    log('СЕГМЕНТ fetch ОШИБКА: ' + e);
+                });
+            }, function (m) { log('ВАРИАНТ: ' + m); });
+        }, function (m) { log('MASTER: ' + m); });
     }
 
     function playInLampa(title, url, map) {
