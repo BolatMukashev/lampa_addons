@@ -183,18 +183,102 @@
         return [];
     }
 
+    function sortedKeys(qualities) {
+        return Object.keys(qualities).sort(function (a, b) { return parseInt(b) - parseInt(a); });
+    }
+
+    function copyText(text) {
+        try {
+            if (Lampa.Utils && Lampa.Utils.copyTextToClipboard) {
+                Lampa.Utils.copyTextToClipboard(text, function () {
+                    Lampa.Noty.show('Ссылка скопирована');
+                }, function () { log('копирование не удалось'); });
+                return;
+            }
+        } catch (e) {}
+        try {
+            navigator.clipboard.writeText(text).then(function () { Lampa.Noty.show('Ссылка скопирована'); });
+        } catch (e) { log('копирование: ' + e.message); }
+    }
+
+    function playInLampa(title, url, map) {
+        log('плеер Lampa, URL: ' + url.slice(0, 160));
+        root.style.display = 'none';
+        try {
+            Lampa.Player.play({ url: url, title: title, quality: map });
+        } catch (e) {
+            log('Player.play ОШИБКА: ' + e.message);
+            root.style.display = 'flex';
+        }
+    }
+
     function startPlayer(title, qualities) {
-        var keys = Object.keys(qualities).sort(function (a, b) { return parseInt(b) - parseInt(a); });
+        setStatus('');
+        var keys = sortedKeys(qualities);
         if (!keys.length) {
             log('видеопотоки не найдены');
             return Lampa.Noty.show('Не удалось найти видеопоток');
         }
+        log('качества: ' + keys.join(','));
+
         var map = {};
         keys.forEach(function (k) { map[k + 'p'] = qualities[k]; });
-        log('плеер, качества: ' + keys.join(','));
 
-        root.style.display = 'none';
-        Lampa.Player.play({ url: qualities[keys[0]], title: title, quality: map });
+        var old = document.getElementById('ph-dialog');
+        if (old) old.parentNode.removeChild(old);
+
+        var dlg = document.createElement('div');
+        dlg.id = 'ph-dialog';
+        dlg.style.cssText = 'position:absolute;left:0;right:0;top:0;bottom:0;background:rgba(0,0,0,.8);' +
+            'display:flex;align-items:center;justify-content:center;z-index:5';
+
+        var card = document.createElement('div');
+        card.style.cssText = 'background:#222;border-radius:12px;padding:14px;width:85%;max-width:420px;' +
+            'display:flex;flex-direction:column;gap:8px';
+
+        var h = document.createElement('div');
+        h.textContent = title;
+        h.style.cssText = 'font-size:13px;color:#ccc;max-height:3.8em;overflow:hidden';
+        card.appendChild(h);
+
+        function btn(text, fn) {
+            var b = document.createElement('button');
+            b.className = 'ph-btn';
+            b.textContent = text;
+            b.onclick = fn;
+            card.appendChild(b);
+        }
+        function closeDlg() { if (dlg.parentNode) dlg.parentNode.removeChild(dlg); }
+
+        keys.forEach(function (k) {
+            btn('▶ ' + k + 'p (плеер Lampa)', function () {
+                closeDlg();
+                playInLampa(title, qualities[k], map);
+            });
+        });
+
+        btn('Внешний плеер (Android)', function () {
+            var url = qualities[keys[Math.min(1, keys.length - 1)]];
+            closeDlg();
+            try {
+                if (Lampa.Android && Lampa.Android.openPlayer) {
+                    log('внешний плеер: ' + url.slice(0, 120));
+                    Lampa.Android.openPlayer(url, { title: title, url: url });
+                } else {
+                    log('Lampa.Android.openPlayer недоступен');
+                    Lampa.Noty.show('Внешний плеер недоступен');
+                }
+            } catch (e) { log('внешний плеер ОШИБКА: ' + e.message); }
+        });
+
+        btn('Копировать ссылку (' + keys[Math.min(1, keys.length - 1)] + 'p)', function () {
+            copyText(qualities[keys[Math.min(1, keys.length - 1)]]);
+        });
+
+        btn('Отмена', closeDlg);
+
+        dlg.appendChild(card);
+        root.appendChild(dlg);
     }
 
     function play(item) {
@@ -385,7 +469,14 @@
         document.body.appendChild(root);
 
         try {
-            Lampa.Player.listener.follow('destroy', function () { root.style.display = 'flex'; });
+            ['start', 'ready', 'error', 'destroy'].forEach(function (name) {
+                Lampa.Player.listener.follow(name, function (ev) {
+                    var info = '';
+                    try { info = JSON.stringify(ev || '').slice(0, 120); } catch (x) {}
+                    log('player ' + name + ' ' + info);
+                    if (name === 'destroy') root.style.display = 'flex';
+                });
+            });
         } catch (e) { log('Player.listener недоступен: ' + e.message); }
     }
 
