@@ -14,7 +14,11 @@
     }
 
     function get(url, ok, fail) {
-        network.native(wrap(url), ok, fail || function () {}, false, { dataType: 'text' });
+        network.native(wrap(url), ok, function (e) {
+            var why = e && (e.status || e.statusText || e.message || e.responseText) || 'нет ответа (вероятно CORS)';
+            Lampa.Noty.show('PH: ошибка запроса: ' + String(why).slice(0, 80));
+            if (fail) fail(e);
+        }, false, { dataType: 'text' });
     }
 
     function buildUrl(o, page) {
@@ -132,7 +136,11 @@
             get(buildUrl(object, 1), function (html) {
                 var items = parseList(html);
                 if (items.length) _this.build({ results: items, page: 1, total_pages: 50 });
-                else _this.empty();
+                else {
+                    var s = typeof html === 'string' ? html : JSON.stringify(html || '');
+                    Lampa.Noty.show('PH: получено ' + s.length + ' симв., pcVideoListItem: ' + (s.indexOf('pcVideoListItem') > -1 ? 'есть' : 'нет') + ', начало: ' + s.slice(0, 60).replace(/\s+/g, ' '));
+                    _this.empty();
+                }
             }, function () {
                 _this.empty();
             });
