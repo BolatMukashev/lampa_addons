@@ -213,34 +213,33 @@
         } catch (e) { fail('исключение ' + e.message); }
     }
 
-    // Проба цепочки: master -> вариант -> первый сегмент
+    // Проба цепочки так, как это делает встроенный плеер (fetch из браузерного движка, без лишних заголовков)
     function probe(url) {
-        nativeText(url, function (d) {
-            var txt = String(d);
-            log('MASTER: ' + txt.replace(/\s+/g, ' '));
-            var lines = txt.split(/\r?\n/).filter(function (l) { return l && l.charAt(0) !== '#'; });
-            if (!lines.length) return log('в master нет ссылок на варианты');
+        function f(label, u, cb) {
+            var ctl = window.AbortController ? new AbortController() : null;
+            fetch(u, ctl ? { signal: ctl.signal } : {}).then(function (r) {
+                log(label + ' fetch: статус ' + r.status +
+                    ', CORS-заголовок: ' + (r.headers.get('access-control-allow-origin') || 'нет') +
+                    ', тип: ' + (r.headers.get('content-type') || '?'));
+                if (cb) return r.text().then(cb);
+                if (ctl) ctl.abort();
+            }).catch(function (e) {
+                log(label + ' fetch ОШИБКА: ' + e + ' (CORS или сеть)');
+            });
+        }
 
-            var v = resolveUrl(url, lines[0].trim());
-            log('ВАРИАНТ URL: ' + v);
+        function firstLink(txt) {
+            var lines = String(txt).split(/\r?\n/).filter(function (l) { return l && l.charAt(0) !== '#'; });
+            return lines.length ? lines[0].trim() : '';
+        }
 
-            nativeText(v, function (vd) {
-                var vt = String(vd);
-                log('ВАРИАНТ ок, ' + vt.length + ' симв.: ' + vt.slice(0, 300).replace(/\s+/g, ' '));
-
-                var segs = vt.split(/\r?\n/).filter(function (l) { return l && l.charAt(0) !== '#'; });
-                if (!segs.length) return log('в варианте нет сегментов');
-
-                var seg = resolveUrl(v, segs[0].trim());
-                log('СЕГМЕНТ URL: ' + seg);
-
-                fetch(seg, { headers: { Range: 'bytes=0-99' } }).then(function (r) {
-                    log('СЕГМЕНТ fetch: статус ' + r.status);
-                }).catch(function (e) {
-                    log('СЕГМЕНТ fetch ОШИБКА: ' + e);
-                });
-            }, function (m) { log('ВАРИАНТ: ' + m); });
-        }, function (m) { log('MASTER: ' + m); });
+        f('MASTER', url, function (t) {
+            var v = resolveUrl(url, firstLink(t));
+            f('ВАРИАНТ', v, function (vt) {
+                var seg = resolveUrl(v, firstLink(vt));
+                f('СЕГМЕНТ', seg, null);
+            });
+        });
     }
 
     function playInLampa(title, url, map) {
