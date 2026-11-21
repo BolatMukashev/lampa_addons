@@ -201,8 +201,28 @@
         } catch (e) { log('копирование: ' + e.message); }
     }
 
+    // Проба: отвечает ли CDN на запрос и пропустит ли его браузерный движок (как у встроенного плеера)
+    function probe(url) {
+        try {
+            network.native(url, function (d) {
+                log('ПРОБА native: ОК, ' + (d && d.length) + ' симв., начало: ' + String(d).slice(0, 90).replace(/\s+/g, ' '));
+            }, function (e) {
+                log('ПРОБА native: ОШИБКА ' + (e ? (e.status || e.statusText || e.message || JSON.stringify(e)) : '?'));
+            }, false, { dataType: 'text' });
+        } catch (e) { log('ПРОБА native исключение: ' + e.message); }
+
+        try {
+            fetch(url).then(function (r) {
+                log('ПРОБА fetch (как во встроенном плеере): статус ' + r.status);
+            }).catch(function (e) {
+                log('ПРОБА fetch (как во встроенном плеере): ОШИБКА ' + e + ' -> признак CORS');
+            });
+        } catch (e) { log('ПРОБА fetch исключение: ' + e.message); }
+    }
+
     function playInLampa(title, url, map) {
         log('плеер Lampa, URL: ' + url.slice(0, 160));
+        probe(url);
         root.style.display = 'none';
         try {
             Lampa.Player.play({ url: url, title: title, quality: map });
