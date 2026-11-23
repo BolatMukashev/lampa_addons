@@ -10,6 +10,7 @@
     var network = new Lampa.Reguest();
     var state = { sort: 'ht', search: '', page: 0, loading: false, ended: false };
     var root, grid, body, status;
+    var currentItem = null;
 
     // ---------- журнал ----------
     function log(msg) {
@@ -238,6 +239,9 @@
             f('ВАРИАНТ', v, function (vt) {
                 var seg = resolveUrl(v, firstLink(vt));
                 f('СЕГМЕНТ', seg, null);
+                nativeText(seg, function (d) {
+                    log('СЕГМЕНТ native: ОК, получено ' + (d && d.length) + ' симв.');
+                }, function (m) { log('СЕГМЕНТ native: ' + m); });
             });
         });
     }
@@ -252,6 +256,48 @@
             log('Player.play ОШИБКА: ' + e.message);
             root.style.display = 'flex';
         }
+    }
+
+    // Плеер самого сайта в iframe (видео запрашивается с домена сайта, без проблем CORS)
+    function openEmbed(title, item) {
+        var m = item && item.video && item.video.match(/viewkey=(\w+)/);
+        if (!m) return log('iframe: нет viewkey');
+
+        var src = 'https://www.pornhub.org/embed/' + m[1];
+        log('iframe: ' + src);
+
+        var wrap = document.createElement('div');
+        wrap.style.cssText = 'position:absolute;left:0;right:0;top:0;bottom:0;background:#000;z-index:6;' +
+            'display:flex;flex-direction:column';
+
+        var bar = document.createElement('div');
+        bar.style.cssText = 'display:flex;gap:8px;align-items:center;padding:8px;background:#1e1e1e';
+
+        var t = document.createElement('div');
+        t.textContent = title;
+        t.style.cssText = 'flex:1;font-size:12px;color:#ccc;overflow:hidden;white-space:nowrap;text-overflow:ellipsis';
+        bar.appendChild(t);
+
+        var x = document.createElement('button');
+        x.className = 'ph-btn ph-close';
+        x.style.marginLeft = '0';
+        x.textContent = '✕';
+        x.onclick = function () {
+            fr.src = 'about:blank'; // остановить воспроизведение
+            if (wrap.parentNode) wrap.parentNode.removeChild(wrap);
+        };
+        bar.appendChild(x);
+
+        var fr = document.createElement('iframe');
+        fr.src = src;
+        fr.setAttribute('allowfullscreen', 'true');
+        fr.setAttribute('allow', 'autoplay; fullscreen; encrypted-media');
+        fr.style.cssText = 'flex:1;border:0;width:100%;background:#000';
+        fr.onload = function () { log('iframe загружен'); };
+
+        wrap.appendChild(bar);
+        wrap.appendChild(fr);
+        root.appendChild(wrap);
     }
 
     function startPlayer(title, qualities) {
@@ -292,6 +338,11 @@
         }
         function closeDlg() { if (dlg.parentNode) dlg.parentNode.removeChild(dlg); }
 
+        btn('▶ Плеер сайта (iframe)', function () {
+            closeDlg();
+            openEmbed(title, currentItem);
+        });
+
         keys.forEach(function (k) {
             btn('▶ ' + k + 'p (плеер Lampa)', function () {
                 closeDlg();
@@ -325,6 +376,7 @@
 
     function play(item) {
         log('видео: ' + item.video);
+        currentItem = item;
         status.textContent = 'Загрузка видео…';
 
         get(item.video, function (html) {
